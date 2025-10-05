@@ -138,4 +138,36 @@ router.get('/code-exists/:email', (req, res) => {
   );
 });
 
+// Delete a negotiation (requires buyer email and dashboard code for security)
+router.delete('/:id', (req, res) => {
+  const { email, dashboard_code } = req.body;
+  const { id } = req.params;
+
+  // First verify the negotiation belongs to this buyer and matches the dashboard code
+  db.get(
+    `SELECT id FROM negotiations WHERE id = ? AND buyer_email = ? AND dashboard_code = ?`,
+    [id, email, dashboard_code],
+    (err, row) => {
+      if (err) {
+        return res.status(500).json({ error: "Failed to verify negotiation" });
+      }
+      if (!row) {
+        return res.status(403).json({ error: "Unauthorized or negotiation not found" });
+      }
+
+      // Proceed with deletion
+      db.run(
+        `DELETE FROM negotiations WHERE id = ?`,
+        [id],
+        function (err) {
+          if (err) {
+            return res.status(500).json({ error: "Failed to delete negotiation" });
+          }
+          res.json({ deleted: true, id: id });
+        }
+      );
+    }
+  );
+});
+
 module.exports = router;

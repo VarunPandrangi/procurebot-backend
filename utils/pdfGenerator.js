@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer');
+const { chromium } = require('playwright');
 
 // Defensive text cleanup for chat
 function formatMessage(text) {
@@ -24,7 +24,7 @@ function renderKeyValueTable(title, rows) {
             <td class="kv-label">${k}</td>
             <td class="kv-value">${v}</td>
           </tr>`
-      ).join("")}
+        ).join("")}
     </table>
   `;
 }
@@ -67,6 +67,7 @@ function renderChatHistory(history, buyerName, supplierName) {
   }).join("");
 }
 
+// Main Playwright-based PDF export function:
 async function generateNegotiationPDF(negotiation, pdfPath = null) {
   const target = negotiation.target_details || {};
   const buyerRows = [
@@ -142,10 +143,19 @@ async function generateNegotiationPDF(negotiation, pdfPath = null) {
   </body>
   </html>
   `;
-  const browser = await puppeteer.launch({ headless: "new" });
+
+  // Launch Chromium and generate the PDF using Playwright:
+  const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
-  await page.setContent(html, { waitUntil: "networkidle0" });
-  const buffer = await page.pdf({ format: 'A4', printBackground: true, path: pdfPath || undefined });
+  await page.setContent(html, { waitUntil: "load" });
+  await page.emulateMedia({ media: 'print' });
+
+  // Playwright's pdf will only work in headless Chromium
+  const buffer = await page.pdf({
+    format: 'A4',
+    printBackground: true,
+    path: pdfPath || undefined,
+  });
   await browser.close();
   return buffer;
 }

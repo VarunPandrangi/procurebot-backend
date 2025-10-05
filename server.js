@@ -33,7 +33,13 @@ app.get('/api/health', (req, res) => {
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*" }
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
 /**
@@ -186,19 +192,23 @@ function getNextStage(currentStage, supplierMessage, rejections=0) {
 }
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('✅ User connected:', socket.id);
 
   socket.on('joinNegotiation', ({ negotiationId, userType }) => {
     socket.join(`negotiation_${negotiationId}`);
-    console.log(`${userType} joined room negotiation_${negotiationId}`);
+    console.log(`✅ ${userType} joined room negotiation_${negotiationId} (socket: ${socket.id})`);
   });
 
   socket.on('chatMessage', async ({ negotiationId, messageObj }) => {
+    console.log(`📨 Received message from ${messageObj.sender} in negotiation ${negotiationId}`);
     db.get(
       `SELECT target_details, chat_history, stage FROM negotiations WHERE id = ?`,
       [negotiationId],
       async (err, row) => {
-        if (err || !row) return;
+        if (err || !row) {
+          console.error('❌ Error fetching negotiation:', err);
+          return;
+        }
         let chat = [];
         try { chat = JSON.parse(row.chat_history); } catch { chat = []; }
         let currentStage = row.stage || 1;
@@ -210,8 +220,10 @@ io.on('connection', (socket) => {
           `UPDATE negotiations SET chat_history = ?, stage = ?, updated_at = ? WHERE id = ?`,
           [JSON.stringify(chat), currentStage, new Date().toISOString(), negotiationId]
         );
+        console.log(`📤 Broadcasting message to room negotiation_${negotiationId}`);
         io.to(`negotiation_${negotiationId}`).emit('chatMessage', messageObj);
         if (messageObj.sender === "supplier") {
+          console.log(`🤖 Generating AI response for negotiation ${negotiationId}...`);
           const targetDetails = JSON.parse(row.target_details);
           const aiReply = await callDeepSeekAPI(chat, targetDetails, currentStage);
           const aiMsg = { sender: "AI_bot", text: aiReply, timestamp: new Date().toISOString() };
@@ -220,6 +232,7 @@ io.on('connection', (socket) => {
             `UPDATE negotiations SET chat_history = ? WHERE id = ?`,
             [JSON.stringify(chat), negotiationId]
           );
+          console.log(`📤 Broadcasting AI response to room negotiation_${negotiationId}`);
           io.to(`negotiation_${negotiationId}`).emit('chatMessage', aiMsg);
         }
       }
@@ -227,6 +240,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('concludeNegotiation', ({ negotiationId, closer }) => {
+    console.log(`🏁 Concluding negotiation ${negotiationId} by ${closer}`);
     db.run(
       `UPDATE negotiations SET status = 'concluded', updated_at = ? WHERE id = ?`,
       [new Date().toISOString(), negotiationId]
@@ -235,7 +249,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    console.log('❌ User disconnected:', socket.id);
   });
 });
 

@@ -3,15 +3,14 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
-
-// Gemini SDK
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const axios = require('axios');
 
 const db = require('./models/Negotiation');
 const negotiationRouter = require('./routes/negotiation');
 
-// Setup Gemini API client
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// DeepSeek API configuration
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
 const app = express();
 app.use(cors());
@@ -20,6 +19,16 @@ app.use('/api/negotiations', negotiationRouter);
 
 app.get('/', (req, res) => {
   res.send('ProcureBot backend is running!');
+});
+
+// Health check endpoint for deployment verification
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'API is working correctly',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
 });
 
 const server = http.createServer(app);
@@ -123,27 +132,49 @@ IMPORTANT:
 }
 
 /**
- * Call Gemini API with stage awareness
+ * Call DeepSeek API with stage awareness
  */
-async function callGeminiAPI(chatHistory, targetDetails, currentStage, stageData) {
+async function callDeepSeekAPI(chatHistory, targetDetails, currentStage, stageData) {
   try {
     const systemPrompt = buildSystemPrompt(targetDetails, currentStage, stageData);
     const promptHistory = chatHistory.map(m => `${m.sender}: ${m.text}`).join('\n\n');
-    const fullPrompt = [systemPrompt, promptHistory].join('\n\n');
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: fullPrompt }] }],
-      generationConfig: { maxOutputTokens: 500, temperature: 0.2, topP: 0.4 }
-    });
-    const reply = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I'm unable to provide a response at the moment.";
+    
+    // Build messages array for DeepSeek
+    const messages = [
+      {
+        role: "system",
+        content: systemPrompt
+      },
+      {
+        role: "user",
+        content: promptHistory
+      }
+    ];
+
+    const response = await axios.post(
+      DEEPSEEK_API_URL,
+      {
+        model: "deepseek-chat",
+        messages: messages,
+        temperature: 0.2,
+        max_tokens: 500,
+        top_p: 0.4
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+        }
+      }
+    );
+
+    const reply = response.data?.choices?.[0]?.message?.content || "Sorry, I'm unable to provide a response at the moment.";
     return reply;
   } catch (err) {
-    console.error("Gemini API error:", err?.response?.data || err.message);
-    return "Sorry, there was a problem with the Gemini response.";
+    console.error("DeepSeek API error:", err?.response?.data || err.message);
+    return "Sorry, there was a problem with the DeepSeek response.";
   }
 }
-
-// ... (rest of the server code remains unchanged) ...
 
 function getNextStage(currentStage, supplierMessage, rejections=0) {
   const firmRefusals = ["no", "we will stick", "cannot", "will not", "won't"];
@@ -182,7 +213,7 @@ io.on('connection', (socket) => {
         io.to(`negotiation_${negotiationId}`).emit('chatMessage', messageObj);
         if (messageObj.sender === "supplier") {
           const targetDetails = JSON.parse(row.target_details);
-          const aiReply = await callGeminiAPI(chat, targetDetails, currentStage);
+          const aiReply = await callDeepSeekAPI(chat, targetDetails, currentStage);
           const aiMsg = { sender: "AI_bot", text: aiReply, timestamp: new Date().toISOString() };
           chat.push(aiMsg);
           db.run(
